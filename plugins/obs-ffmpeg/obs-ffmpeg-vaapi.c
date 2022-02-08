@@ -711,7 +711,7 @@ static obs_properties_t *vaapi_properties(void *unused, void *type_data)
 		obs_property_list_add_int(list, "2", 60);
 		obs_property_list_add_int(list, "2.1", 63);
 		obs_property_list_add_int(list, "3", 90);
-		obs_property_list_add_int(list, "3.1", 93);
+		obs_property_list_add_int(list, "3.1", 93;
 		obs_property_list_add_int(list, "4", 120);
 		obs_property_list_add_int(list, "4.1", 123);
 		obs_property_list_add_int(list, "5", 150);
