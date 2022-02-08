@@ -795,8 +795,6 @@ struct obs_encoder_info vaapi_hevc_encoder_info = {
 	.encode = vaapi_encode,
 	.get_defaults2 = vaapi_defaults,
 	.get_properties2 = vaapi_properties,
-	.get_extra_data = vaapi_extra_data,
-	.get_sei_data = vaapi_sei_data,
 	.get_video_info = vaapi_video_info,
 	.type_data = &hevc_type,
 };
