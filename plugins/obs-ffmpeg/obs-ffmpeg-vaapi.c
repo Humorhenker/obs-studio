@@ -72,35 +72,10 @@ struct vaapi_encoder {
 	bool initialized;
 };
 
-/* Identify codecs, and some default values */
-struct type_data {
-	const int id;
-	const int profile;
-	const int level;
-	const char *name;
-	const char *rate_control;
-};
-
-static struct type_data h264_type = {
-	.id = AV_CODEC_ID_H264,
-	.profile = FF_PROFILE_H264_CONSTRAINED_BASELINE,
-	.level = 40,
-	.rate_control = "CBR",
-	.name = "FFMPEG VAAPI",
-};
-
-static struct type_data hevc_type = {
-	.id = AV_CODEC_ID_HEVC,
-	.profile = FF_PROFILE_HEVC_MAIN,
-	.level = 0,
-	.name = "FFMPEG VAAPI (hevc)",
-	.rate_control = "CQP",
-};
-
-static const char *vaapi_getname(void *type_data)
+static const char *vaapi_getname(void *unused)
 {
-	struct type_data *data = type_data;
-	return data->name;
+	UNUSED_PARAMETER(unused);
+	return "FFMPEG VAAPI";
 }
 
 static inline bool valid_format(enum video_format format)
@@ -198,15 +173,15 @@ typedef struct {
 	bool maxrate;
 } rc_mode_t;
 
-/* Set "allowed" options per Rate Control */
-static const rc_mode_t RC_MODES[] = {
-	{.name = "CBR", .qp = false, .bitrate = true, .maxrate = false},
-	{.name = "CQP", .qp = true, .bitrate = false, .maxrate = false},
-	{.name = "VBR", .qp = false, .bitrate = true, .maxrate = true},
-	NULL};
-
 static const rc_mode_t *get_rc_mode(const char *name)
 {
+	/* Set "allowed" options per Rate Control */
+	static const rc_mode_t RC_MODES[] = {
+		{.name = "CBR", .qp = false, .bitrate = true, .maxrate = false},
+		{.name = "CQP", .qp = true, .bitrate = false, .maxrate = false},
+		{.name = "VBR", .qp = false, .bitrate = true, .maxrate = true},
+		NULL};
+
 	const rc_mode_t *rc_mode = RC_MODES;
 
 	while (!!rc_mode && strcmp(rc_mode->name, name) != 0)
@@ -306,7 +281,6 @@ static bool vaapi_update(void *data, obs_data_t *settings)
 
 	info("settings:\n"
 	     "\tdevice:       %s\n"
-	     "\tcodec:        %s\n"
 	     "\trate_control: %s\n"
 	     "\tprofile:      %d\n"
 	     "\tlevel:        %d\n"
@@ -317,9 +291,9 @@ static bool vaapi_update(void *data, obs_data_t *settings)
 	     "\twidth:        %d\n"
 	     "\theight:       %d\n"
 	     "\tb-frames:     %d\n",
-	     device, enc->vaapi->name, rate_control, profile, level, qp,
-	     bitrate, maxrate, enc->context->gop_size, enc->context->width,
-	     enc->context->height, enc->context->max_b_frames);
+	     device, rate_control, profile, level, qp, bitrate, maxrate,
+	     enc->context->gop_size, enc->context->width, enc->context->height,
+	     enc->context->max_b_frames);
 
 	return vaapi_init_codec(enc, device);
 }
@@ -373,12 +347,9 @@ static void *vaapi_create(obs_data_t *settings, obs_encoder_t *encoder)
 
 	if (vaapi_codec == AV_CODEC_ID_H264) {
 		enc->vaapi = avcodec_find_encoder_by_name("h264_vaapi");
-		enc->first_packet = true;
 	}
-	if (vaapi_codec == AV_CODEC_ID_HEVC) {
-		enc->vaapi = avcodec_find_encoder_by_name("hevc_vaapi");
-		enc->first_packet = false;
-	}
+
+	enc->first_packet = true;
 
 	blog(LOG_INFO, "---------------------------------");
 
@@ -514,10 +485,7 @@ static bool vaapi_encode(void *data, struct encoder_frame *frame,
 		packet->data = enc->buffer.array;
 		packet->size = enc->buffer.num;
 		packet->type = OBS_ENCODER_VIDEO;
-		packet->keyframe =
-			enc->vaapi->id == AV_CODEC_ID_H264
-				? obs_avc_keyframe(packet->data, packet->size)
-				: av_pkt.flags & AV_PKT_FLAG_KEY;
+		packet->keyframe = obs_avc_keyframe(packet->data, packet->size);
 		*received_packet = true;
 	} else {
 		*received_packet = false;
@@ -538,20 +506,19 @@ static void set_visible(obs_properties_t *ppts, const char *name, bool visible)
 	obs_property_set_visible(p, visible);
 }
 
-static void vaapi_defaults(obs_data_t *settings, void *type_data)
+static void vaapi_defaults(obs_data_t *settings)
 {
-	struct type_data *codec = type_data;
-
 	obs_data_set_default_string(settings, "vaapi_device",
 				    "/dev/dri/renderD128");
-	obs_data_set_default_int(settings, "vaapi_codec", codec->id);
-	obs_data_set_default_int(settings, "profile", codec->profile);
-	obs_data_set_default_int(settings, "level", codec->level);
+	obs_data_set_default_int(settings, "vaapi_codec", AV_CODEC_ID_H264);
+	obs_data_set_default_int(settings, "profile",
+				 FF_PROFILE_H264_CONSTRAINED_BASELINE);
+	obs_data_set_default_int(settings, "level", 40);
 	obs_data_set_default_int(settings, "bitrate", 2500);
 	obs_data_set_default_int(settings, "keyint_sec", 0);
 	obs_data_set_default_int(settings, "bf", 0);
-	obs_data_set_default_string(settings, "rate_control",
-				    codec->rate_control);
+	obs_data_set_default_int(settings, "rendermode", 0);
+	obs_data_set_default_string(settings, "rate_control", "CBR");
 	obs_data_set_default_int(settings, "qp", 20);
 	obs_data_set_default_int(settings, "maxrate", 0);
 }
@@ -599,13 +566,9 @@ static bool get_device_name_from_pci(struct pci_access *pacc, char *pci_slot,
 	return false;
 }
 
-static obs_properties_t *vaapi_properties(void *unused, void *type_data)
+static obs_properties_t *vaapi_properties(void *unused)
 {
 	UNUSED_PARAMETER(unused);
-	struct type_data *codec = type_data;
-	struct dstr name;
-
-	dstr_init(&name);
 
 	obs_properties_t *props = obs_properties_create();
 	obs_property_t *list;
@@ -669,63 +632,40 @@ static obs_properties_t *vaapi_properties(void *unused, void *type_data)
 		}
 	}
 
-	if (codec->id == AV_CODEC_ID_H264) {
-		list = obs_properties_add_list(props, "profile",
-						obs_module_text("Profile"),
-						OBS_COMBO_TYPE_LIST,
-						OBS_COMBO_FORMAT_INT);
-		obs_property_list_add_int(list, "Constrained Baseline (default)",
-						FF_PROFILE_H264_CONSTRAINED_BASELINE);
-		obs_property_list_add_int(list, "Main", FF_PROFILE_H264_MAIN);
-		obs_property_list_add_int(list, "High", FF_PROFILE_H264_HIGH);
+	list = obs_properties_add_list(props, "vaapi_codec",
+				       obs_module_text("VAAPI.Codec"),
+				       OBS_COMBO_TYPE_LIST,
+				       OBS_COMBO_FORMAT_INT);
 
-		list = obs_properties_add_list(props, "level",
-						obs_module_text("Level"),
-						OBS_COMBO_TYPE_LIST,
-						OBS_COMBO_FORMAT_INT);
-		obs_property_list_add_int(list, "Auto", FF_LEVEL_UNKNOWN);
-		obs_property_list_add_int(list, "3.0", 30);
-		obs_property_list_add_int(list, "3.1", 31);
-		obs_property_list_add_int(list, "4.0 (default) (Compatibility mode)",
-						40);
-		obs_property_list_add_int(list, "4.1", 41);
-		obs_property_list_add_int(list, "4.2", 42);
-		obs_property_list_add_int(list, "5.0", 50);
-		obs_property_list_add_int(list, "5.1", 51);
-		obs_property_list_add_int(list, "5.2", 52);
-	} else if (codec->id == AV_CODEC_ID_HEVC) {
-		list = obs_properties_add_list(props, "profile",
-						obs_module_text("Profile"),
-						OBS_COMBO_TYPE_LIST,
-						OBS_COMBO_FORMAT_INT);
-		obs_property_list_add_int(list, "Main",	FF_PROFILE_HEVC_MAIN);
-		obs_property_list_add_int(list, "Main10", FF_PROFILE_HEVC_MAIN_10);
-		obs_property_list_add_int(list, "Rext", FF_PROFILE_HEVC_REXT);
+	obs_property_list_add_int(list, "H.264 (default)", AV_CODEC_ID_H264);
 
-		list = obs_properties_add_list(props, "level",
-						obs_module_text("Level"),
-						OBS_COMBO_TYPE_LIST,
-						OBS_COMBO_FORMAT_INT);
-		obs_property_list_add_int(list, "Auto", FF_LEVEL_UNKNOWN);
-		obs_property_list_add_int(list, "1", 30);
-		obs_property_list_add_int(list, "2", 60);
-		obs_property_list_add_int(list, "2.1", 63);
-		obs_property_list_add_int(list, "3", 90);
-		obs_property_list_add_int(list, "3.1", 93;
-		obs_property_list_add_int(list, "4", 120);
-		obs_property_list_add_int(list, "4.1", 123);
-		obs_property_list_add_int(list, "5", 150);
-		obs_property_list_add_int(list, "5.1", 153);
-		obs_property_list_add_int(list, "5.2", 156);
-		obs_property_list_add_int(list, "6", 180);
-		obs_property_list_add_int(list, "6.1", 183);
-		obs_property_list_add_int(list, "6.2", 186);
-	}
- 
- 	list = obs_properties_add_list(props, "rate_control",
- 				       obs_module_text("RateControl"),
- 				       OBS_COMBO_TYPE_LIST,
- 				       OBS_COMBO_FORMAT_STRING);
+	list = obs_properties_add_list(props, "profile",
+				       obs_module_text("Profile"),
+				       OBS_COMBO_TYPE_LIST,
+				       OBS_COMBO_FORMAT_INT);
+	obs_property_list_add_int(list, "Constrained Baseline (default)",
+				  FF_PROFILE_H264_CONSTRAINED_BASELINE);
+	obs_property_list_add_int(list, "Main", FF_PROFILE_H264_MAIN);
+	obs_property_list_add_int(list, "High", FF_PROFILE_H264_HIGH);
+
+	list = obs_properties_add_list(props, "level", obs_module_text("Level"),
+				       OBS_COMBO_TYPE_LIST,
+				       OBS_COMBO_FORMAT_INT);
+	obs_property_list_add_int(list, "Auto", FF_LEVEL_UNKNOWN);
+	obs_property_list_add_int(list, "3.0", 30);
+	obs_property_list_add_int(list, "3.1", 31);
+	obs_property_list_add_int(list, "4.0 (default) (Compatibility mode)",
+				  40);
+	obs_property_list_add_int(list, "4.1", 41);
+	obs_property_list_add_int(list, "4.2", 42);
+	obs_property_list_add_int(list, "5.0", 50);
+	obs_property_list_add_int(list, "5.1", 51);
+	obs_property_list_add_int(list, "5.2", 52);
+
+	list = obs_properties_add_list(props, "rate_control",
+				       obs_module_text("RateControl"),
+				       OBS_COMBO_TYPE_LIST,
+				       OBS_COMBO_FORMAT_STRING);
 	obs_property_list_add_string(list, "CBR (default)", "CBR");
 	obs_property_list_add_string(list, "CQP", "CQP");
 	obs_property_list_add_string(list, "VBR", "VBR");
@@ -747,7 +687,6 @@ static obs_properties_t *vaapi_properties(void *unused, void *type_data)
 			       obs_module_text("KeyframeIntervalSec"), 0, 20,
 			       1);
 
-	dstr_free(&name);
 	return props;
 }
 
@@ -777,26 +716,11 @@ struct obs_encoder_info vaapi_encoder_info = {
 	.create = vaapi_create,
 	.destroy = vaapi_destroy,
 	.encode = vaapi_encode,
-	.get_defaults2 = vaapi_defaults,
-	.get_properties2 = vaapi_properties,
+	.get_defaults = vaapi_defaults,
+	.get_properties = vaapi_properties,
 	.get_extra_data = vaapi_extra_data,
 	.get_sei_data = vaapi_sei_data,
 	.get_video_info = vaapi_video_info,
-	.type_data = &h264_type,
-};
-
-struct obs_encoder_info vaapi_hevc_encoder_info = {
-	.id = "ffmpeg_vaapi_hevc",
-	.type = OBS_ENCODER_VIDEO,
-	.codec = "hevc",
-	.get_name = vaapi_getname,
-	.create = vaapi_create,
-	.destroy = vaapi_destroy,
-	.encode = vaapi_encode,
-	.get_defaults2 = vaapi_defaults,
-	.get_properties2 = vaapi_properties,
-	.get_video_info = vaapi_video_info,
-	.type_data = &hevc_type,
 };
 
 #endif
