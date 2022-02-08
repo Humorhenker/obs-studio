@@ -92,9 +92,9 @@ static struct type_data h264_type = {
 static struct type_data hevc_type = {
 	.id = AV_CODEC_ID_HEVC,
 	.profile = FF_PROFILE_HEVC_MAIN,
-	.level = 120,
-	.rate_control = "CBR",
+	.level = 0,
 	.name = "FFMPEG VAAPI (hevc)",
+	.rate_control = "CQP",
 };
 
 static const char *vaapi_getname(void *type_data)
